@@ -2,28 +2,31 @@
 
 var moment = require('./moment');
 
+var DAYS_OF_WEEK = {'ПН': 0, 'ВТ': 1, 'СР': 2, 'ЧТ': 3, 'ПТ': 4, 'СБ': 5, 'ВС': 6};
+var MINUTES_IN_HOUR = 60;
+var MINUTES_IN_DAY = 1440;
+var MINUTES_IN_WEEK = 10080;
+var DAYS_IN_WEEK = 7;
+
 // Выбирает подходящий ближайший момент начала ограбления
 module.exports.getAppropriateMoment = function (json, minDuration, workingHours) {
-    var appropriateMoment = moment();
 
     var gang = JSON.parse(json);
-    var daysOfWeek = {'ПН': 0, 'ВТ': 1, 'СР': 2, 'ЧТ': 3, 'ПТ': 4, 'СБ': 5, 'ВС': 6};
+    var timepoints = [];
     var intervals = [];
-    var pairs = [];
 
     function parseTimeToMinutes(string) {
-        var dayOfWeek = daysOfWeek[string.substring(0, 2)];
+        var dayOfWeek = DAYS_OF_WEEK[string.substring(0, 2)];
         var hour = parseInt(string.substring(3, 5));
         var minutes = parseInt(string.substring(6, 8));
         var offset = parseInt(string.substring(8));
 
-        return nextPositiveTime(dayOfWeek * 24 * 60 + hour * 60 + minutes - offset * 60);
+        return nextPositiveTime(dayOfWeek * MINUTES_IN_DAY + hour * MINUTES_IN_HOUR + minutes -
+            offset * MINUTES_IN_HOUR);
     }
 
-    var minutesInWeek = 7 * 24 * 60;
-
     function nextPositiveTime(time) {
-        return (time + minutesInWeek) % minutesInWeek;
+        return (time + MINUTES_IN_WEEK) % MINUTES_IN_WEEK;
     }
 
     Object.keys(gang).forEach(function (person) {
@@ -31,58 +34,56 @@ module.exports.getAppropriateMoment = function (json, minDuration, workingHours)
         times.forEach(function (time) {
             var timeFrom = parseTimeToMinutes(time.from);
             var timeTo = parseTimeToMinutes(time.to);
-            intervals.push({time: timeFrom, start: true});
-            intervals.push({time: timeTo, start: false});
-            pairs.push([timeFrom, timeTo]);
+            timepoints.push({time: timeFrom, start: true});
+            timepoints.push({time: timeTo, start: false});
+            intervals.push([timeFrom, timeTo]);
         });
     });
 
-    Object.keys(daysOfWeek).forEach(function (dayOfWeek) {
+    Object.keys(DAYS_OF_WEEK).forEach(function (dayOfWeek) {
         var timeBusyTo = parseTimeToMinutes(dayOfWeek + ' ' + workingHours.from);
         var timeBusyFrom = parseTimeToMinutes(dayOfWeek + ' ' + workingHours.to);
 
         if (timeBusyFrom > timeBusyTo) {
-            timeBusyTo = (timeBusyTo + 24 * 60) % minutesInWeek;
+            timeBusyTo = (timeBusyTo + MINUTES_IN_DAY) % MINUTES_IN_WEEK;
         }
-        intervals.push({time: timeBusyFrom, start: true});
-        intervals.push({time: timeBusyTo, start: false});
-        pairs.push([timeBusyFrom, timeBusyTo]);
+        timepoints.push({time: timeBusyFrom, start: true});
+        timepoints.push({time: timeBusyTo, start: false});
+        intervals.push([timeBusyFrom, timeBusyTo]);
     });
 
     function getCurrentOffsetInMinutes() {
         var currentDate = new Date();
-        return nextPositiveTime(((currentDate.getDay() + 6) % 7) * 24 * 60 +
-            currentDate.getHours() * 60 + currentDate.getMinutes() +
+        return nextPositiveTime(((currentDate.getDay() + DAYS_IN_WEEK - 1) % DAYS_IN_WEEK) *
+            MINUTES_IN_DAY + currentDate.getHours() * MINUTES_IN_HOUR + currentDate.getMinutes() +
             currentDate.getTimezoneOffset());
     }
 
     var current = getCurrentOffsetInMinutes();
 
-    intervals.sort(function (a, b) {
-        a = nextPositiveTime(a.time - current);
-        b = nextPositiveTime(b.time - current);
-
-        return a - b;
+    timepoints.sort(function (a, b) {
+        return nextPositiveTime(a.time - current) - nextPositiveTime(b.time - current);
     });
 
-    var gangCount = pairs.reduce(function (acc, pair) {
-        if ((current >= pair[0] && current <= pair[1] && pair[0] < pair[1]) ||
-            (pair[0] > pair[1] && (current >= pair[0] || current <= pair[1]))) {
+    var gangCount = intervals.reduce(function (acc, interval) {
+        if ((interval[0] < interval[1] && current >= interval[0] && current <= interval[1]) ||
+            (interval[0] > interval[1] && (current >= interval[0] || current <= interval[1]))) {
             return acc + 1;
         } else {
             return acc;
         }
     }, 0);
+
     var startTime = 0;
     var endTime = 0;
     var found = false;
 
-    for (var i = 0; i < intervals.length * 2; i++) {
-        var time = intervals[i % intervals.length];
-        if (time.start) {
+    for (var i = 0; i < timepoints.length * 2; i++) {
+        var timepoint = timepoints[i % timepoints.length];
+        if (timepoint.start) {
             gangCount++;
             if (gangCount === 1) {
-                endTime = time.time;
+                endTime = timepoint.time;
                 if (endTime - startTime >= minDuration) {
                     found = true;
                     break;
@@ -91,7 +92,7 @@ module.exports.getAppropriateMoment = function (json, minDuration, workingHours)
         } else {
             gangCount--;
             if (gangCount === 0) {
-                startTime = time.time;
+                startTime = timepoint.time;
             }
         }
     }
@@ -100,6 +101,7 @@ module.exports.getAppropriateMoment = function (json, minDuration, workingHours)
         return null;
     }
 
+    var appropriateMoment = moment();
     appropriateMoment.date = startTime;
     appropriateMoment.timezone = 5;
     return appropriateMoment;
